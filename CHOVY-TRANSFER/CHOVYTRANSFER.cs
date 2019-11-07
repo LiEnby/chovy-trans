@@ -8,6 +8,7 @@ using System.Text;
 using KeyDerivation;
 using PSVIMGTOOLS;
 using System.Drawing;
+using System.Threading;
 
 namespace CHOVY_TRANSFER
 {
@@ -16,6 +17,18 @@ namespace CHOVY_TRANSFER
         [DllImport("CHOVY.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern int chovy_gen(string ebootpbp, UInt64 AID, string outscefile);
 
+        public bool IsDexAidSet()
+        {
+            string isDex = ReadSetting("dexAid");
+            if (isDex == "false" || isDex == "")
+            {
+                return false;
+            }
+            else
+            {
+                return true;
+            }
+        }
         public string GetCmaDir()
         {
             string Dir = "";
@@ -227,7 +240,8 @@ namespace CHOVY_TRANSFER
             byte[] Header = new byte[0x8];
             pbps.Read(Header, 0x00, 0x8);
             pbps.Close();
-            if(Encoding.UTF8.GetString(Header) == "PSISOIMG")
+            string header = Encoding.UTF8.GetString(Header);
+            if (header == "PSISOIMG" /*Single Disc PSX*/ || header == "PSTITLEI" /*Multi Disc PSX*/)
             {
                 return true;
             }
@@ -375,7 +389,17 @@ namespace CHOVY_TRANSFER
                 File.Delete(sigFile);
             }
 
-            int ChovyGenRes = chovy_gen(ebootFile, uAid, sigFile);
+            int ChovyGenRes = 100;
+            Thread ChovyGen = new Thread(() =>
+            {
+                ChovyGenRes = chovy_gen(ebootFile, uAid, sigFile);
+            });
+
+            ChovyGen.Start();
+            while (ChovyGen.IsAlive)
+            {
+                Application.DoEvents();
+            }
 
             if (!File.Exists(sigFile) || ChovyGenRes != 0)
             {
@@ -395,7 +419,16 @@ namespace CHOVY_TRANSFER
 
             // Pacakge GAME
 
-            byte[] CmaKey = CmaKeys.GenerateKey(bAid);
+            byte[] CmaKey;
+            if(!IsDexAidSet())
+            {
+                CmaKey = CmaKeys.GenerateKey(bAid);
+            }
+            else
+            {
+                CmaKey = CmaKeys.GenerateKey(new byte[0x8] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+            }
+            
 
             string[] entrys = Directory.GetFileSystemEntries(gameFolder, "*", SearchOption.AllDirectories);
             long noEntrys = entrys.LongLength;
@@ -413,15 +446,35 @@ namespace CHOVY_TRANSFER
             string scesys;
             if (!isPs1)
             {
-                pgameFolder = Path.Combine(backupDir, "PGAME", sAid, titleId, "game");
-                pgameFolderl = Path.Combine(backupDir, "PGAME", sAid, titleId, "license");
-                scesys = Path.Combine(backupDir, "PGAME", sAid, titleId, "sce_sys");
+                if(!IsDexAidSet())
+                {
+                    pgameFolder = Path.Combine(backupDir, "PGAME", sAid, titleId, "game");
+                    pgameFolderl = Path.Combine(backupDir, "PGAME", sAid, titleId, "license");
+                    scesys = Path.Combine(backupDir, "PGAME", sAid, titleId, "sce_sys");
+                }
+                else
+                {
+                    pgameFolder = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "game");
+                    pgameFolderl = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "license");
+                    scesys = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "sce_sys");
+                }
+               
             }
             else
             {
-                pgameFolder = Path.Combine(backupDir, "PSGAME", sAid, titleId, "game");
-                pgameFolderl = Path.Combine(backupDir, "PSGAME", sAid, titleId, "license");
-                scesys = Path.Combine(backupDir, "PSGAME", sAid, titleId, "sce_sys");
+                if(!IsDexAidSet())
+                {
+                    pgameFolder = Path.Combine(backupDir, "PSGAME", sAid, titleId, "game");
+                    pgameFolderl = Path.Combine(backupDir, "PSGAME", sAid, titleId, "license");
+                    scesys = Path.Combine(backupDir, "PSGAME", sAid, titleId, "sce_sys");
+                }
+                else
+                {
+                    pgameFolder = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "game");
+                    pgameFolderl = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "license");
+                    scesys = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "sce_sys");
+                }
+                
             }
            
             Directory.CreateDirectory(pgameFolder);
@@ -515,5 +568,18 @@ namespace CHOVY_TRANSFER
             pspGames.Enabled = true;
         }
 
+        private void dexToggle_Click(object sender, EventArgs e)
+        {
+            if(IsDexAidSet())
+            {
+                WriteSetting("dexAid", "false");
+                MessageBox.Show("Cex AID Will be used for CMA.", "CexAid", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                WriteSetting("dexAid", "true");
+                MessageBox.Show("Dex AID (0000000000000000) Will be used for CMA.","DexAid",MessageBoxButtons.OK,MessageBoxIcon.Information);
+            }
+        }
     }
 }
