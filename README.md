@@ -8,4 +8,6 @@ And does NOT enable piracy, you can only bring DIGITAL games you legally own on 
 heres an example of Spyro The Dragon running on a USA account: https://www.youtube.com/watch?v=CO5vgqEAiD0
 normally impossible to do. but alas here it is using this trick-
 
+Usage: https://www.youtube.com/watch?v=iDjOHnM3ZHk
+
 credit: SteelWolf89, Cloud Strife, dots-tb, motoharu
