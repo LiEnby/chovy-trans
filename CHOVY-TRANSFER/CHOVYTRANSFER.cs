@@ -2,22 +2,42 @@
 using System;
 using System.IO;
 using System.Windows.Forms;
-using Param_SFO;
 using System.Runtime.InteropServices;
 using System.Text;
-using KeyDerivation;
-using PSVIMGTOOLS;
 using System.Drawing;
 using System.Threading;
 using System.Collections.Generic;
 using System.Linq;
 
+using Li.Progress;
+using Param;
+using PspCrypto;
+using Vita.ContentManager;
+using Vita.PsvImgTools;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
+
 namespace CHOVY_TRANSFER
 {
     public partial class CHOVYTRANSFER : Form
     {
-        [DllImport("CHOVY.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int chovy_gen(string ebootpbp, UInt64 AID, string outscefile);
+        const int FW_VERSION = 0x3600000;
+        private byte[] chovy_gen(string ebootpbp, UInt64 AID)
+        {
+            bool ps1 = IsPs1(ebootpbp);
+            using (FileStream fs = File.OpenRead(ebootpbp))
+            {
+                byte[] ebootSig = new byte[0x200];
+                SceNpDrm.Aid = AID;
+                
+                if(ps1)
+                    SceNpDrm.KsceNpDrmEbootSigGenPs1(fs, ebootSig, FW_VERSION);
+                else
+                    SceNpDrm.KsceNpDrmEbootSigGenPsp(fs, ebootSig, FW_VERSION);
+
+                return ebootSig;
+            }
+        }
 
         public bool IsDexAidSet()
         {
@@ -31,55 +51,6 @@ namespace CHOVY_TRANSFER
                 return true;
             }
         }
-        public string GetCmaDir()
-        {
-            string Dir = "";
-            try
-            {
-                //try qcma
-                Dir = Registry.CurrentUser.OpenSubKey(@"Software\codestation\qcma").GetValue("appsPath").ToString();
-            }
-            catch (Exception)
-            {
-                try
-                {
-                    //try sony cma
-                    Dir = Registry.CurrentUser.OpenSubKey(@"Software\Sony Corporation\Content Manager Assistant\Settings").GetValue("ApplicationHomePath").ToString();
-                }
-                catch (Exception)
-                {
-                    try
-                    {
-                        //try devkit cma
-                        Dir = Registry.CurrentUser.OpenSubKey(@"Software\SCE\PSP2\Services\Content Manager Assistant for PlayStation(R)Vita DevKit\Settings").GetValue("ApplicationHomePath").ToString();
-                    }
-                    catch (Exception)
-                    {
-                        try
-                        {
-                            string DefaultDir = Path.Combine(Environment.GetEnvironmentVariable("HOMEDRIVE"), Environment.GetEnvironmentVariable("HOMEPATH"), "Documents", "PS Vita");
-                            if (Directory.Exists(DefaultDir))
-                            {
-                                Dir = DefaultDir;
-                            }
-                        }
-                        catch (Exception)
-                        {
-                            //Do nothing
-                        }
-                    }
-                }
-
-            }
-
-            if (ReadSetting("CmaDir") != "")
-            {
-                Dir = ReadSetting("CmaDir");
-            }
-            
-            return Dir.Replace("/","\\");
-        }
-
 
         public string ReadSetting(string Setting)
         {
@@ -160,13 +131,10 @@ namespace CHOVY_TRANSFER
                         string Title = GetTitleFromPbp(EbootPbp);
                         string ContentId = GetContentIdFromPbp(EbootPbp);
 
+                        string LicenseFile = Path.Combine(PspDir, "LICENSE", ContentId + ".RIF");
 
-                        string LicenseFile = Path.Combine(PspDir, "LICENSE", ContentId);
-
-                        if (TitleId.Length == 9 && File.Exists(LicenseFile));
-                        {
+                        if (TitleId.Length == 9 && File.Exists(LicenseFile))
                             pspGames.Items.Add(TitleId + " - " + Title);
-                        } 
                         
                     }
                     catch (Exception) { };
@@ -194,12 +162,8 @@ namespace CHOVY_TRANSFER
         public string GetTitleFromPbp(string pbp)
         {
             byte[] SfoData = GetSfo(pbp);
-
-            using (MemoryStream ms = new MemoryStream(SfoData, 0x00, SfoData.Length)) 
-            {
-                PARAM_SFO sfo = new PARAM_SFO(ms);
-                return sfo.Title;
-            }
+            Sfo sfo = Sfo.ReadSfo(SfoData);
+            return sfo["TITLE"] as String;
         }
 
         public byte[] GetSfo(string pbp)
@@ -338,8 +302,14 @@ namespace CHOVY_TRANSFER
                 pspFolder.Text = PspDir;
             }
 
+            string cmaDir = ReadSetting("CmaDir");
+            if(cmaDir == "")
+                cmaDir = SettingsReader.BackupsFolder;
+            
+            SettingsReader.BackupsFolder = cmaDir;
+
             ChangePspDir(FindPspDir());
-            ChangeCmaDir(GetCmaDir());
+            ChangeCmaDir(SettingsReader.BackupsFolder);
             PopulatePspGameList();
         }
 
@@ -356,11 +326,13 @@ namespace CHOVY_TRANSFER
 
         private void cmaDir_TextChanged(object sender, EventArgs e)
         {
-            WriteSetting("CmaDir", Path.Combine(driveLetterDst.Text, cmaDir.Text));
+            string dir = Path.Combine(driveLetterDst.Text, cmaDir.Text);
+            WriteSetting("CmaDir", dir);
+            SettingsReader.BackupsFolder = dir;
         }
         private void driveLetterDst_SelectedIndexChanged(object sender, EventArgs e)
         {
-            WriteSetting("CmaDir", Path.Combine(driveLetterDst.Text, cmaDir.Text));
+            cmaDir_TextChanged(sender, e);
         }
         private void transVita_EnabledChanged(object sender, EventArgs e)
         {
@@ -376,10 +348,10 @@ namespace CHOVY_TRANSFER
             Environment.Exit(0);
         }
 
-        private void transVita_Click(object sender, EventArgs e)
+        private async void transVita_Click(object sender, EventArgs e)
         {
 
-            if(!Directory.Exists(Path.Combine(driveLetterDst.Text, cmaDir.Text)))
+            if(!Directory.Exists(SettingsReader.BackupsFolder))
             {
                 MessageBox.Show("CMA Folder Doesn't Exist", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
@@ -404,19 +376,23 @@ namespace CHOVY_TRANSFER
             cmaDir.ReadOnly = true;
             pspGames.Enabled = false;
 
+            bool isDlc = false;
+
             string titleId = pspGames.SelectedItem.ToString().Substring(0, 9);
-            string gameFolder = Path.Combine(driveLetterSrc.Text, pspFolder.Text, "GAME", titleId);
+            string pspDir = Path.Combine(driveLetterSrc.Text, pspFolder.Text);
+            string gameFolder = Path.Combine(pspDir, "GAME", titleId);
             string ebootFile = Path.Combine(gameFolder, "EBOOT.PBP");
             if (!File.Exists(ebootFile))
+            {
+                isDlc = true;
                 ebootFile = Path.Combine(gameFolder, "PARAM.PBP");
+            }
 
             List<string> licenseFiles = new List<string>();
             string cid = GetContentIdFromPbp(ebootFile);
-            licenseFiles.Add(Path.Combine(driveLetterSrc.Text, pspFolder.Text, "LICENSE", cid + ".RIF"));
+            licenseFiles.Add(Path.Combine(pspDir, "LICENSE", cid + ".RIF"));
             string sigFile = Path.Combine(gameFolder, "__sce_ebootpbp");
-            string backupDir = Path.Combine(driveLetterDst.Text, cmaDir.Text);
-
-            bool isDlc = Path.GetFileName(gameFolder) == "PARAM.PBP";
+            
             bool isPs1 = IsPs1(ebootFile);
 
             if (!File.Exists(licenseFiles.First()))
@@ -444,74 +420,44 @@ namespace CHOVY_TRANSFER
                 File.Delete(sigFile);
             }
 
-            int ChovyGenRes = 100;
-            Thread ChovyGen = new Thread(() =>
-            {
-                ChovyGenRes = chovy_gen(ebootFile, uAid, sigFile);
-            });
-
-            ChovyGen.Start();
-            while (ChovyGen.IsAlive)
-            {
-                Application.DoEvents();
-            }
-
-            if (!File.Exists(sigFile) || ChovyGenRes != 0 && !isDlc)
-            {
-                MessageBox.Show("CHOVY-GEN Failed! Please check CHOVY.DLL exists\nand that the Microsoft Visual C++ 2015 Redistributable Update 3 RC is installed", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                transVita.Enabled = true;
-                driveLetterDst.Enabled = true;
-                driveLetterSrc.Enabled = true;
-                pspFolder.ReadOnly = false;
-                cmaDir.ReadOnly = false;
-                pspGames.Enabled = true;
-                return;
-            }
+            byte[] EbootSig = chovy_gen(ebootFile, uAid);
+            Account CmaAccount = new Account(uAid);
+            CmaAccount.Devkit = IsDexAidSet();
+            
 
             /*
              *  BUILD PSVIMG FILE(s)
              */
 
             // Pacakge GAME
-
-            byte[] CmaKey;
-            if(!IsDexAidSet())
-            {
-                CmaKey = CmaKeys.GenerateKey(bAid);
-            }
-            else
-            {
-                CmaKey = CmaKeys.GenerateKey(new byte[0x8] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
-            }
             
+            byte[] CmaKey = CmaAccount.CmaKey;
 
             string[] entrys = Directory.GetFileSystemEntries(gameFolder, "*", SearchOption.AllDirectories);
             long noEntrys = entrys.LongLength;
             string parentPath = "ux0:pspemu/temp/game/PSP/GAME/" + titleId;
             int noBlocks = 0;
             foreach (string fileName in Directory.GetFiles(gameFolder, "*", SearchOption.AllDirectories))
-            {
                 noBlocks += Convert.ToInt32(new FileInfo(fileName).Length / PSVIMGConstants.PSVIMG_BLOCK_SIZE);
-            }
             progressBar.Maximum = noBlocks;
 
 
             string pgameFolder;
-            string pgameFolderl;
+            string pgameFolderLicense;
             string scesys;
             if (!isPs1)
             {
                 if(!IsDexAidSet())
                 {
-                    pgameFolder = Path.Combine(backupDir, "PGAME", sAid, titleId, "game");
-                    pgameFolderl = Path.Combine(backupDir, "PGAME", sAid, titleId, "license");
-                    scesys = Path.Combine(backupDir, "PGAME", sAid, titleId, "sce_sys");
+                    pgameFolder = Path.Combine(SettingsReader.PspFolder, sAid, titleId, "game");
+                    pgameFolderLicense = Path.Combine(SettingsReader.PspFolder, sAid, titleId, "license");
+                    scesys = Path.Combine(SettingsReader.PspFolder, sAid, titleId, "sce_sys");
                 }
                 else
                 {
-                    pgameFolder = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "game");
-                    pgameFolderl = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "license");
-                    scesys = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "sce_sys");
+                    pgameFolder = Path.Combine(SettingsReader.PspFolder, "0000000000000000", titleId, "game");
+                    pgameFolderLicense = Path.Combine(SettingsReader.PspFolder, "0000000000000000", titleId, "license");
+                    scesys = Path.Combine(SettingsReader.PspFolder, "0000000000000000", titleId, "sce_sys");
                 }
                
             }
@@ -519,94 +465,95 @@ namespace CHOVY_TRANSFER
             {
                 if(!IsDexAidSet())
                 {
-                    pgameFolder = Path.Combine(backupDir, "PSGAME", sAid, titleId, "game");
-                    pgameFolderl = Path.Combine(backupDir, "PSGAME", sAid, titleId, "license");
-                    scesys = Path.Combine(backupDir, "PSGAME", sAid, titleId, "sce_sys");
+                    pgameFolder = Path.Combine(SettingsReader.Ps1Folder, sAid, titleId, "game");
+                    pgameFolderLicense = Path.Combine(SettingsReader.Ps1Folder, sAid, titleId, "license");
+                    scesys = Path.Combine(SettingsReader.Ps1Folder, sAid, titleId, "sce_sys");
                 }
                 else
                 {
-                    pgameFolder = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "game");
-                    pgameFolderl = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "license");
-                    scesys = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "sce_sys");
+                    pgameFolder = Path.Combine(SettingsReader.Ps1Folder, "0000000000000000", titleId, "game");
+                    pgameFolderLicense = Path.Combine(SettingsReader.Ps1Folder, "0000000000000000", titleId, "license");
+                    scesys = Path.Combine(SettingsReader.Ps1Folder, "0000000000000000", titleId, "sce_sys");
                 }
                 
             }
            
             Directory.CreateDirectory(pgameFolder);
-            Directory.CreateDirectory(pgameFolderl);
+            Directory.CreateDirectory(pgameFolderLicense);
             Directory.CreateDirectory(scesys);
 
-            string psvimgFilepathl = Path.Combine(pgameFolderl, "license.psvimg");
+            string psvimgFilepathLicense = Path.Combine(pgameFolderLicense, "license.psvimg");
             string psvimgFilepath = Path.Combine(pgameFolder, "game.psvimg");
 
-            string psvmdFilepathl = Path.Combine(pgameFolderl, "license.psvmd");
+            string psvmdFilepathLicense = Path.Combine(pgameFolderLicense, "license.psvmd");
             string psvmdFilepath = Path.Combine(pgameFolder, "game.psvmd");
 
-            FileStream gamePsvimg = File.OpenWrite(psvimgFilepath);
-            gamePsvimg.SetLength(0);
-            PSVIMGBuilder builder = new PSVIMGBuilder(gamePsvimg, CmaKey);
-
-            foreach (string entry in entrys)
+            await Task.Run(() =>
             {
-                string relativePath = entry.Remove(0, gameFolder.Length);
-                relativePath = relativePath.Replace('\\', '/');
-
-                if(Path.GetExtension(entry).ToUpperInvariant() == ".EDAT")
+                using (FileStream gamePsvimg = File.Open(psvimgFilepath, FileMode.Create, FileAccess.ReadWrite))
                 {
-                    string edatContentId = GetContentIdFromPspEdat(entry);
-                    string rifPath = Path.Combine(driveLetterSrc.Text, pspFolder.Text, "LICENSE", edatContentId + ".RIF");
-                    if (!licenseFiles.Contains(rifPath) && File.Exists(rifPath))
-                        licenseFiles.Add(rifPath);
-                }
-
-                bool isDir = File.GetAttributes(entry).HasFlag(FileAttributes.Directory);
-
-                if (isDir)
-                {
-                    builder.AddDir(entry, parentPath, relativePath);
-                }
-                else
-                {
-                    builder.AddFileAsync(entry, parentPath, relativePath);
-                    while (!builder.HasFinished)
+                    PSVIMGBuilder builder = new PSVIMGBuilder(gamePsvimg, CmaKey);
+                    builder.RegisterCallback((ProgressInfo inf) =>
                     {
-                        try
-                        {
+                        Invoke((Action)delegate {
                             int tBlocks = builder.BlocksWritten;
+                            if (tBlocks > noBlocks) tBlocks = noBlocks;
                             progressBar.Value = tBlocks;
                             decimal progress = Math.Floor(((decimal)tBlocks / (decimal)noBlocks) * 100);
                             progressStatus.Text = progress.ToString() + "%";
-                            currentFile.Text = "Processing: " + Path.GetFileName(entry);
+                            currentFile.Text = inf.CurrentProcess;
+                        });
+                    });
+
+                    foreach (string entry in entrys)
+                    {
+                        string relativePath = entry.Remove(0, gameFolder.Length);
+                        relativePath = relativePath.Replace('\\', '/');
+
+                        if (Path.GetExtension(entry).ToUpperInvariant() == ".EDAT")
+                        {
+                            string edatContentId = GetContentIdFromPspEdat(entry);
+                            string rifPath = Path.Combine(pspDir, "LICENSE", edatContentId + ".RIF");
+                            if (!licenseFiles.Contains(rifPath) && File.Exists(rifPath))
+                                licenseFiles.Add(rifPath);
                         }
-                        catch (Exception) { }
 
-                        Application.DoEvents();
+                        bool isDir = File.GetAttributes(entry).HasFlag(FileAttributes.Directory);
+
+                        if (isDir)
+                        {
+                            builder.AddDir(entry, parentPath, relativePath);
+                        }
+                        else
+                        {
+                            builder.AddFile(entry, parentPath, relativePath);
+                        }
                     }
+
+                    // add __sce_ebootpbp
+                    if(!isDlc)
+                        builder.AddFile(EbootSig, parentPath, "/__sce_ebootpbp");
+
+                    long ContentSize = builder.Finish();
+
+                    using (FileStream gamePsvmd = File.Open(psvmdFilepath, FileMode.Create, FileAccess.ReadWrite))
+                        PSVMDBuilder.CreatePsvmd(gamePsvmd, gamePsvimg, ContentSize, "game", CmaKey);
                 }
-            }
-
-            long ContentSize = builder.Finish();
-            gamePsvimg = File.OpenRead(psvimgFilepath);
-            FileStream gamePsvmd = File.OpenWrite(psvmdFilepath);
-            PSVMDBuilder.CreatePsvmd(gamePsvmd, gamePsvimg, ContentSize, "game", CmaKey);
-            gamePsvmd.Close();
-            gamePsvimg.Close();
 
 
-            // Package LICENSE
-            FileStream licensePsvimg = File.OpenWrite(psvimgFilepathl);
-            licensePsvimg.SetLength(0);
-            builder = new PSVIMGBuilder(licensePsvimg, CmaKey);
-            foreach(string licenseFile in licenseFiles)
-                builder.AddFile(licenseFile, "ux0:pspemu/temp/game/PSP/LICENSE", "/" + Path.GetFileNameWithoutExtension(licenseFile) + ".rif");
-            ContentSize = builder.Finish();
+                // Package LICENSE
+                using (FileStream licensePsvimg = File.Open(psvimgFilepathLicense, FileMode.Create, FileAccess.ReadWrite))
+                {
+                    PSVIMGBuilder builder = new PSVIMGBuilder(licensePsvimg, CmaKey);
+                    foreach (string licenseFile in licenseFiles)
+                        builder.AddFile(licenseFile, "ux0:pspemu/temp/game/PSP/LICENSE", "/" + Path.GetFileNameWithoutExtension(licenseFile) + ".rif");
+                    long ContentSize = builder.Finish();
 
-            licensePsvimg = File.OpenRead(psvimgFilepathl);
-            FileStream licensePsvmd = File.OpenWrite(psvmdFilepathl);
-            PSVMDBuilder.CreatePsvmd(licensePsvmd, licensePsvimg, ContentSize, "license", CmaKey);
-            licensePsvmd.Close();
-            licensePsvimg.Close();
-
+                    using (FileStream licensePsvmd = File.Open(psvmdFilepathLicense, FileMode.Create, FileAccess.ReadWrite))
+                        PSVMDBuilder.CreatePsvmd(licensePsvmd, licensePsvimg, ContentSize, "license", CmaKey);
+                }
+            });
+            
             // Write PARAM.SFO & ICON0.PNG
 
             byte[] ParamSfo = GetSfo(ebootFile);

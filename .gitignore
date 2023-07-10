@@ -2,8 +2,16 @@
 */obj/*
 */bin/*
 
+Thumbs.Db
+
 CHOVY-GEN/Debug/*
 CHOVY-GEN/Release/*
+
+LiLib/bin/*
+LiLib/obj/*
+
+Vita/bin/*
+Vita/lib/*
 
 CHOVY-TRANSFER/obj/*
 CHOVY-TRANSFER/bin/*
