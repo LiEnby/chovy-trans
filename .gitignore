@@ -1,0 +1,9 @@
+.vs/*
+*/obj/*
+*/bin/*
+
+CHOVY-GEN/Debug/*
+CHOVY-GEN/Release/*
+
+CHOVY-TRANSFER/obj/*
+CHOVY-TRANSFER/bin/*

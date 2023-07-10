@@ -43,6 +43,7 @@
             this.progressStatus = new System.Windows.Forms.Label();
             this.pictureBox1 = new System.Windows.Forms.PictureBox();
             this.dexToggle = new System.Windows.Forms.PictureBox();
+            this.currentFile = new System.Windows.Forms.Label();
             this.groupBox1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.dexToggle)).BeginInit();
@@ -247,7 +248,7 @@
             this.pictureBox1.BackgroundImageLayout = System.Windows.Forms.ImageLayout.Stretch;
             this.pictureBox1.Location = new System.Drawing.Point(9, 8);
             this.pictureBox1.Name = "pictureBox1";
-            this.pictureBox1.Size = new System.Drawing.Size(144, 317);
+            this.pictureBox1.Size = new System.Drawing.Size(144, 330);
             this.pictureBox1.TabIndex = 9;
             this.pictureBox1.TabStop = false;
             // 
@@ -260,12 +261,23 @@
             this.dexToggle.TabStop = false;
             this.dexToggle.Click += new System.EventHandler(this.dexToggle_Click);
             // 
+            // currentFile
+            // 
+            this.currentFile.AutoSize = true;
+            this.currentFile.ForeColor = System.Drawing.Color.Lime;
+            this.currentFile.Location = new System.Drawing.Point(173, 328);
+            this.currentFile.Name = "currentFile";
+            this.currentFile.Size = new System.Drawing.Size(55, 13);
+            this.currentFile.TabIndex = 11;
+            this.currentFile.Text = "Waiting ...";
+            // 
             // CHOVYTRANSFER
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.Black;
-            this.ClientSize = new System.Drawing.Size(796, 332);
+            this.ClientSize = new System.Drawing.Size(796, 350);
+            this.Controls.Add(this.currentFile);
             this.Controls.Add(this.dexToggle);
             this.Controls.Add(this.pictureBox1);
             this.Controls.Add(this.progressStatus);
@@ -303,6 +315,7 @@
         private System.Windows.Forms.Label progressStatus;
         private System.Windows.Forms.PictureBox pictureBox1;
         private System.Windows.Forms.PictureBox dexToggle;
+        private System.Windows.Forms.Label currentFile;
     }
 }
 

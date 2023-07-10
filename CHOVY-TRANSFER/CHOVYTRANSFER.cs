@@ -9,6 +9,8 @@ using KeyDerivation;
 using PSVIMGTOOLS;
 using System.Drawing;
 using System.Threading;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CHOVY_TRANSFER
 {
@@ -152,11 +154,12 @@ namespace CHOVY_TRANSFER
                     try
                     {
                         string EbootPbp = Path.Combine(game, "EBOOT.PBP");
-                        
-
+                        if (!File.Exists(EbootPbp))
+                            EbootPbp = Path.Combine(game, "PARAM.PBP");
                         string TitleId = Path.GetFileName(game);
                         string Title = GetTitleFromPbp(EbootPbp);
                         string ContentId = GetContentIdFromPbp(EbootPbp);
+
 
                         string LicenseFile = Path.Combine(PspDir, "LICENSE", ContentId);
 
@@ -173,6 +176,21 @@ namespace CHOVY_TRANSFER
             catch (Exception) { };
             
         }
+
+        public string[] SearchEdats(string gameFolder)
+        {
+            List<string> contentIds = new List<string>();
+            foreach(string file in Directory.GetFiles(gameFolder, "*", SearchOption.AllDirectories))
+            {
+                if(Path.GetExtension(file).ToUpperInvariant() == ".EDAT")
+                {
+                    string contentId = GetContentIdFromPspEdat(file);
+                    contentIds.Add(contentId);
+                }
+            }
+            return contentIds.ToArray();
+        }
+
         public string GetTitleFromPbp(string pbp)
         {
             byte[] SfoData = GetSfo(pbp);
@@ -191,8 +209,6 @@ namespace CHOVY_TRANSFER
             int sfoOffset = ReadInt32(pbps);
             int sfoSize = ReadInt32(pbps);
             
-            
-
             pbps.Seek(sfoOffset, SeekOrigin.Begin);
             sfoSize -= (int)pbps.Position;
 
@@ -218,7 +234,15 @@ namespace CHOVY_TRANSFER
             pbps.Dispose();
             return IconData;
         }
-
+        public string GetContentIdFromPspEdat(string edat)
+        {
+            FileStream edats = File.OpenRead(edat);
+            edats.Seek(0x10, SeekOrigin.Begin);
+            byte[] ContentId = new byte[0x24];
+            edats.Read(ContentId, 0x00, 0x24);
+            edats.Close();
+            return Encoding.UTF8.GetString(ContentId);
+        }
         public string GetContentIdFromPs1Pbp(string pbp)
         {
             FileStream pbps = File.OpenRead(pbp);
@@ -230,13 +254,32 @@ namespace CHOVY_TRANSFER
             pbps.Close();
             return Encoding.UTF8.GetString(ContentId);
         }
-
-        public bool IsPs1(string pbp)
+        public bool IsPsp(string pbp)
         {
             FileStream pbps = File.OpenRead(pbp);
             pbps.Seek(0x24, SeekOrigin.Begin);
             Int64 NPUMDIMGOffest = ReadInt32(pbps);
             pbps.Seek(NPUMDIMGOffest, SeekOrigin.Begin);
+            byte[] Header = new byte[0x8];
+            pbps.Read(Header, 0x00, 0x8);
+            pbps.Close();
+            string header = Encoding.UTF8.GetString(Header);
+            if (header == "NPUMDIMG")
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+
+        }
+        public bool IsPs1(string pbp)
+        {
+            FileStream pbps = File.OpenRead(pbp);
+            pbps.Seek(0x24, SeekOrigin.Begin);
+            Int64 PSIMGOffest = ReadInt32(pbps);
+            pbps.Seek(PSIMGOffest, SeekOrigin.Begin);
             byte[] Header = new byte[0x8];
             pbps.Read(Header, 0x00, 0x8);
             pbps.Close();
@@ -257,9 +300,16 @@ namespace CHOVY_TRANSFER
             {
                 return GetContentIdFromPs1Pbp(pbp);
             }
-            else
+            else if(IsPsp(pbp))
             {
                 return GetContentIdFromPspPbp(pbp);
+            }
+            else
+            {
+                string[] cids = SearchEdats(Path.GetDirectoryName(pbp));
+                if (cids.Length <= 0)
+                    return "";
+                return cids.First();
             }
         }
 
@@ -357,14 +407,19 @@ namespace CHOVY_TRANSFER
             string titleId = pspGames.SelectedItem.ToString().Substring(0, 9);
             string gameFolder = Path.Combine(driveLetterSrc.Text, pspFolder.Text, "GAME", titleId);
             string ebootFile = Path.Combine(gameFolder, "EBOOT.PBP");
+            if (!File.Exists(ebootFile))
+                ebootFile = Path.Combine(gameFolder, "PARAM.PBP");
+
+            List<string> licenseFiles = new List<string>();
             string cid = GetContentIdFromPbp(ebootFile);
-            string licenseFile = Path.Combine(driveLetterSrc.Text, pspFolder.Text, "LICENSE", cid + ".RIF");
+            licenseFiles.Add(Path.Combine(driveLetterSrc.Text, pspFolder.Text, "LICENSE", cid + ".RIF"));
             string sigFile = Path.Combine(gameFolder, "__sce_ebootpbp");
             string backupDir = Path.Combine(driveLetterDst.Text, cmaDir.Text);
 
+            bool isDlc = Path.GetFileName(gameFolder) == "PARAM.PBP";
             bool isPs1 = IsPs1(ebootFile);
 
-            if (!File.Exists(licenseFile))
+            if (!File.Exists(licenseFiles.First()))
             {
                 MessageBox.Show("Could not find LICENSE file!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 transVita.Enabled = true;
@@ -376,7 +431,7 @@ namespace CHOVY_TRANSFER
                 return;
             }
 
-            FileStream rif = File.OpenRead(licenseFile);
+            FileStream rif = File.OpenRead(licenseFiles.First());
             byte[] bAid = new byte[0x08];
             rif.Seek(0x08, SeekOrigin.Begin);
             rif.Read(bAid, 0x00, 0x08);
@@ -401,7 +456,7 @@ namespace CHOVY_TRANSFER
                 Application.DoEvents();
             }
 
-            if (!File.Exists(sigFile) || ChovyGenRes != 0)
+            if (!File.Exists(sigFile) || ChovyGenRes != 0 && !isDlc)
             {
                 MessageBox.Show("CHOVY-GEN Failed! Please check CHOVY.DLL exists\nand that the Microsoft Visual C++ 2015 Redistributable Update 3 RC is installed", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 transVita.Enabled = true;
@@ -456,7 +511,7 @@ namespace CHOVY_TRANSFER
                 {
                     pgameFolder = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "game");
                     pgameFolderl = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "license");
-                    scesys = Path.Combine(backupDir, "PSGAME", "0000000000000000", titleId, "sce_sys");
+                    scesys = Path.Combine(backupDir, "PGAME", "0000000000000000", titleId, "sce_sys");
                 }
                
             }
@@ -496,6 +551,14 @@ namespace CHOVY_TRANSFER
                 string relativePath = entry.Remove(0, gameFolder.Length);
                 relativePath = relativePath.Replace('\\', '/');
 
+                if(Path.GetExtension(entry).ToUpperInvariant() == ".EDAT")
+                {
+                    string edatContentId = GetContentIdFromPspEdat(entry);
+                    string rifPath = Path.Combine(driveLetterSrc.Text, pspFolder.Text, "LICENSE", edatContentId + ".RIF");
+                    if (!licenseFiles.Contains(rifPath) && File.Exists(rifPath))
+                        licenseFiles.Add(rifPath);
+                }
+
                 bool isDir = File.GetAttributes(entry).HasFlag(FileAttributes.Directory);
 
                 if (isDir)
@@ -513,6 +576,7 @@ namespace CHOVY_TRANSFER
                             progressBar.Value = tBlocks;
                             decimal progress = Math.Floor(((decimal)tBlocks / (decimal)noBlocks) * 100);
                             progressStatus.Text = progress.ToString() + "%";
+                            currentFile.Text = "Processing: " + Path.GetFileName(entry);
                         }
                         catch (Exception) { }
 
@@ -533,7 +597,8 @@ namespace CHOVY_TRANSFER
             FileStream licensePsvimg = File.OpenWrite(psvimgFilepathl);
             licensePsvimg.SetLength(0);
             builder = new PSVIMGBuilder(licensePsvimg, CmaKey);
-            builder.AddFile(licenseFile, "ux0:pspemu/temp/game/PSP/LICENSE", "/" + cid + ".rif");
+            foreach(string licenseFile in licenseFiles)
+                builder.AddFile(licenseFile, "ux0:pspemu/temp/game/PSP/LICENSE", "/" + Path.GetFileNameWithoutExtension(licenseFile) + ".rif");
             ContentSize = builder.Finish();
 
             licensePsvimg = File.OpenRead(psvimgFilepathl);
@@ -559,6 +624,7 @@ namespace CHOVY_TRANSFER
             }
             progressBar.Value = 0;
             progressStatus.Text = "0%";
+            currentFile.Text = "Waiting ...";
 
             transVita.Enabled = true;
             driveLetterDst.Enabled = true;
